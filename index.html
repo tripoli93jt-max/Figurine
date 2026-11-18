@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Générateur de figurines STL</title>
+<style>
+  body { font-family: sans-serif; margin: 0; padding: 12px; background: #1e1e2a; color: #eee; }
+  h1 { font-size: 20px; margin: 0 0 10px; }
+  .row { display: flex; flex-wrap: wrap; gap: 14px; }
+  .panel { background: #2b2b3c; border-radius: 10px; padding: 10px; }
+  canvas { background: #111; border-radius: 6px; touch-action: none; }
+  #grid { width: 320px; height: 320px; image-rendering: pixelated; }
+  #view { width: 320px; height: 320px; }
+  .palette { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; max-width: 320px; }
+  .sw { width: 30px; height: 30px; border-radius: 6px; border: 2px solid #555; }
+  .sw.sel { border-color: #fff; }
+  label { display: block; margin: 6px 0; font-size: 14px; }
+  button, select { padding: 8px 12px; margin: 3px; border-radius: 6px; border: 0; background: #5b7cff; color: #fff; font-size: 14px; }
+  button.grey { background: #555; }
+  input[type=range] { width: 200px; }
+</style>
+</head>
+<body>
+<h1>Générateur de figurines STL</h1>
+<div class="row">
+  <div class="panel">
+    <canvas id="grid" width="16" height="16"></canvas>
+    <div class="palette" id="palette"></div>
+    <input type="color" id="custom" value="#c0392b">
+    <button class="grey" id="eraser">Gomme</button>
+    <button class="grey" id="clear">Tout effacer</button>
+  </div>
+  <div class="panel">
+    <canvas id="view" width="320" height="320"></canvas>
+    <label>Épaisseur du héros : <span id="vThick">3</span> mm
+      <input type="range" id="thick" min="1" max="10" value="3"></label>
+    <label>Taille d'un pixel : <span id="vPix">2</span> mm
+      <input type="range" id="pix" min="1" max="4" step="0.5" value="2"></label>
+    <label>Forme du socle
+      <select id="baseShape"><option value="round">Rond</option><option value="square">Carré</option></select></label>
+    <label>Épaisseur du socle : <span id="vBase">3</span> mm
+      <input type="range" id="baseH" min="1" max="6" value="3"></label>
+    <label>Marge du socle : <span id="vMargin">4</span> mm
+      <input type="range" id="margin" min="0" max="10" value="4"></label>
+    <button id="export">Exporter en STL</button>
+  </div>
+</div>
+
+<script>
+const N = 16;
+const cells = Array.from({length: N}, () => Array(N).fill(null));
+const colors = ['#c0392b','#e67e22','#f1c40f','#27ae60','#2980b9','#8e44ad','#ecf0f1','#7f8c8d','#2c3e50','#d2a679','#f5cba7','#6e4b2a'];
+let current = colors[0];
+let erasing = false;
+
+const grid = document.getElementById('grid');
+const gctx = grid.getContext('2d');
+
+function drawGrid() {
+  gctx.clearRect(0, 0, N, N);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    if (cells[y][x]) { gctx.fillStyle = cells[y][x]; gctx.fillRect(x, y, 1, 1); }
+  }
+}
+
+function paintAt(e) {
+  const r = grid.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / r.width * N);
+  const y = Math.floor((e.clientY - r.top) / r.height * N);
+  if (x < 0 || y < 0 || x >= N || y >= N) return;
+  cells[y][x] = erasing ? null : current;
+  drawGrid(); drawView();
+}
+let down = false;
+grid.addEventListener('pointerdown', e => { down = true; paintAt(e); });
+grid.addEventListener('pointermove', e => { if (down) paintAt(e); });
+window.addEventListener('pointerup', () => down = false);
+
+const pal = document.getElementById('palette');
+colors.forEach(c => {
+  const d = document.createElement('div');
+  d.className = 'sw'; d.style.background = c;
+  d.onclick = () => { current = c; erasing = false; mark(d); };
+  pal.appendChild(d);
+});
+function mark(el) { document.querySelectorAll('.sw').forEach(s => s.classList.remove('sel')); if (el) el.classList.add('sel'); }
+document.getElementById('custom').oninput = e => { current = e.target.value; erasing = false; mark(null); };
+document.getElementById('eraser').onclick = () => erasing = true;
+document.getElementById('clear').onclick = () => { cells.forEach(r => r.fill(null)); drawGrid(); drawView(); };
+
+const ids = ['thick','pix','baseH','margin'];
+ids.forEach(i => document.getElementById(i).oninput = () => {
+  document.getElementById({thick:'vThick',pix:'vPix',baseH:'vBase',margin:'vMargin'}[i]).textContent = document.getElementById(i).value;
+  drawView();
+});
+document.getElementById('baseShape').onchange = drawView;
+
+let rotY = 0.6, rotX = 0.5;
+const view = document.getElementById('view');
+const vctx = view.getContext('2d');
+let drag = null;
+view.addEventListener('pointerdown', e => drag = [e.clientX, e.clientY]);
+window.addEventListener('pointerup', () => drag = null);
+view.addEventListener('pointermove', e => {
+  if (!drag) return;
+  rotY += (e.clientX - drag[0]) * 0.01;
+  rotX += (e.clientY - drag[1]) * 0.01;
+  drag = [e.clientX, e.clientY];
+  drawView();
+});
+
+function params() {
+  return {
+    t: +document.getElementById('thick').value,
+    p: +document.getElementById('pix').value,
+    bh: +document.getElementById('baseH').value,
+    m: +document.getElementById('margin').value,
+    shape: document.getElementById('baseShape').value
+  };
+}
+
+function buildBoxes() {
+  const {t, p, bh, m, shape} = params();
+  const W = N * p;
+  const boxes = [];
+  let minX = N, maxX = -1, minY = N, maxY = -1;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (cells[y][x]) {
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  }
+  if (maxX < 0) return {boxes: [], base: null};
+  const cx = (minX + maxX + 1) / 2 * p, spriteW = (maxX - minX + 1) * p;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (cells[y][x]) {
+    boxes.push({
+      x0: x * p - cx, x1: (x + 1) * p - cx,
+      y0: bh, y1: bh + 0, z0: -t / 2, z1: t / 2,
+      top: (maxY - y) * p + bh, bottom: (maxY - y) * p + bh + p,
+      color: cells[y][x]
+    });
+  }
+  const radius = spriteW / 2 + m;
+  return {boxes, base: {shape, radius, h: bh}};
+}
+
+function project(v) {
+  const cy = Math.cos(rotY), sy = Math.sin(rotY), cx = Math.cos(rotX), sx = Math.sin(rotX);
+  let x = v[0] * cy + v[2] * sy, z = -v[0] * sy + v[2] * cy, y = v[1];
+  const y2 = y * cx - z * sx, z2 = y * sx + z * cx;
+  return [160 + x * 5, 260 - y2 * 5, z2];
+}
+
+function cubeFaces(b) {
+  const x0 = b.x0, x1 = b.x1, y0 = b.top, y1 = b.bottom, z0 = b.z0, z1 = b.z1;
+  const v = [[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]];
+  return [[0,1,2,3],[5,4,7,6],[4,0,3,7],[1,5,6,2],[3,2,6,7],[4,5,1,0]].map(f => f.map(i => v[i]));
+}
+
+function drawView() {
+  vctx.clearRect(0, 0, 320, 320);
+  const {boxes, base} = buildBoxes();
+  const polys = [];
+  boxes.forEach(b => cubeFaces(b).forEach(f => {
+    const pts = f.map(project);
+    polys.push({pts, depth: pts.reduce((s, p) => s + p[2], 0) / 4, color: b.color});
+  }));
+  if (base) {
+    const r = base.radius, h = base.h, steps = base.shape === 'round' ? 32 : 4;
+    const ring = [];
+    for (let i = 0; i < steps; i++) {
+      const a = (i + (steps === 4 ? 0.5 : 0)) / steps * Math.PI * 2;
+      const rr = steps === 4 ? r * Math.SQRT2 : r;
+      ring.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+    }
+    const top = ring.map(q => project([q[0], h, q[1]]));
+    const bot = ring.map(q => project([q[0], 0, q[1]]));
+    polys.push({pts: bot, depth: -999, color: '#555'});
+    for (let i = 0; i < steps; i++) {
+      const j = (i + 1) % steps;
+      polys.push({pts: [bot[i], bot[j], top[j], top[i]], depth: (bot[i][2] + bot[j][2]) / 2 - 1, color: '#777'});
+    }
+    polys.push({pts: top, depth: -998, color: '#999'});
+  }
+  polys.sort((a, b) => b.depth - a.depth);
+  polys.forEach(p => {
+    vctx.beginPath();
+    p.pts.forEach((q, i) => i ? vctx.lineTo(q[0], q[1]) : vctx.moveTo(q[0], q[1]));
+    vctx.closePath();
+    vctx.fillStyle = p.color; vctx.fill();
+    vctx.strokeStyle = 'rgba(0,0,0,0.35)'; vctx.stroke();
+  });
+}
+
+function exportSTL() {
+  const {boxes, base} = buildBoxes();
+  if (!boxes.length) { alert('Dessinez d\'abord un héros.'); return; }
+  let out = 'solid figurine\n';
+  function tri(a, b, c) {
+    const u = [b[0]-a[0], b[1]-a[1], b[2]-a[2]], w = [c[0]-a[0], c[1]-a[1], c[2]-a[2]];
+    let n = [u[1]*w[2]-u[2]*w[1], u[2]*w[0]-u[0]*w[2], u[0]*w[1]-u[1]*w[0]];
+    const l = Math.hypot(...n) || 1; n = n.map(k => k / l);
+    out += ` facet normal ${n[0]} ${n[1]} ${n[2]}\n  outer loop\n`;
+    [a, b, c].forEach(q => out += `   vertex ${q[0]} ${q[1]} ${q[2]}\n`);
+    out += '  endloop\n endfacet\n';
+  }
+  boxes.forEach(b => {
+    const x0 = b.x0, x1 = b.x1, y0 = b.top, y1 = b.bottom, z0 = b.z0, z1 = b.z1;
+    const v = [[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]];
+    [[0,3,2,1],[4,5,6,7],[0,4,7,3],[1,2,6,5],[3,7,6,2],[0,1,5,4]].forEach(f => {
+      tri(v[f[0]], v[f[1]], v[f[2]]); tri(v[f[0]], v[f[2]], v[f[3]]);
+    });
+  });
+  const r = base.radius, h = base.h, steps = base.shape === 'round' ? 48 : 4;
+  const ring = [];
+  for (let i = 0; i < steps; i++) {
+    const a = (i + (steps === 4 ? 0.5 : 0)) / steps * Math.PI * 2;
+    const rr = steps === 4 ? r * Math.SQRT2 : r;
+    ring.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+  }
+  for (let i = 0; i < steps; i++) {
+    const j = (i + 1) % steps;
+    const a = ring[i], b = ring[j];
+    tri([0,h,0], [b[0],h,b[1]], [a[0],h,a[1]]);
+    tri([0,0,0], [a[0],0,a[1]], [b[0],0,b[1]]);
+    tri([a[0],0,a[1]], [a[0],h,a[1]], [b[0],h,b[1]]);
+    tri([a[0],0,a[1]], [b[0],h,b[1]], [b[0],0,b[1]]);
+  }
+  out += 'endsolid figurine\n';
+  const blob = new Blob([out], {type: 'model/stl'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'figurine.stl';
+  a.click();
+}
+document.getElementById('export').onclick = exportSTL;
+
+drawGrid(); drawView();
+</script>
+</body>
+</html>
